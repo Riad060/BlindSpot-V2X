@@ -9,3 +9,4 @@ Installed:
 - ONNX Runtime
 
 Implemented an initial simulated hazard classification system.
+Jira task: KAN-1
