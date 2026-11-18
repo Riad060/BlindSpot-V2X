@@ -5,6 +5,7 @@ import threading
 import cv2
 import numpy as np
 import onnxruntime as ort
+import serial
 from flask import Flask, Response
 from picamera2 import Picamera2
 
@@ -20,6 +21,26 @@ CLASSES = {
 
 CONFIDENCE = 0.40
 MODEL_SIZE = 640
+
+# ESP32 Traffic Node communication
+ESP32_PORT = "/dev/ttyUSB0"
+ESP32_BAUD = 115200
+
+esp32 = None
+last_hazard_state = None
+
+try:
+    esp32 = serial.Serial(
+        ESP32_PORT,
+        ESP32_BAUD,
+        timeout=1,
+        write_timeout=1
+    )
+    time.sleep(2)
+    print("Traffic ESP32 connected")
+
+except serial.SerialException as e:
+    print(f"ESP32 connection failed: {e}")
 
 # Load YOLOv8n ONNX model
 session = ort.InferenceSession(
@@ -79,6 +100,33 @@ def video():
         generate(),
         mimetype="multipart/x-mixed-replace; boundary=frame"
     )
+
+
+def send_hazard_alert(hazard_detected):
+    global esp32, last_hazard_state
+
+    hazard_state = "HAZARD" if hazard_detected else "CLEAR"
+
+    # Only transmit when the hazard state changes
+    if hazard_state == last_hazard_state:
+        return
+
+    if esp32 is None:
+        return
+
+    try:
+        esp32.write((hazard_state + "\n").encode())
+        esp32.flush()
+
+        print(
+            f"V2X Alert sent: {hazard_state}",
+            flush=True
+        )
+
+        last_hazard_state = hazard_state
+
+    except (serial.SerialException, OSError) as e:
+        print(f"ESP32 communication error: {e}", flush=True)
 
 
 def run_detection():
@@ -222,6 +270,10 @@ def run_detection():
                     2
                 )
 
+            # Automatically send hazard status to ESP32
+            hazard_detected = len(detections) > 0
+            send_hazard_alert(hazard_detected)
+
             fps = 1 / elapsed if elapsed > 0 else 0
 
             # Display inference performance
@@ -236,10 +288,28 @@ def run_detection():
                 2
             )
 
+            # Display current hazard status
+            status = "HAZARD" if hazard_detected else "CLEAR"
+            status_color = (
+                (0, 0, 255) if hazard_detected
+                else (0, 255, 0)
+            )
+
+            cv2.putText(
+                frame,
+                f"V2X Status: {status}",
+                (10, 55),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                status_color,
+                2
+            )
+
             print(
                 f"Detection: {', '.join(detections) or 'None'} "
                 f"| Inference: {elapsed * 1000:.0f} ms "
-                f"| FPS: {fps:.2f}",
+                f"| FPS: {fps:.2f} "
+                f"| V2X: {status}",
                 flush=True
             )
 
@@ -258,6 +328,9 @@ def run_detection():
         camera.stop()
         camera.close()
 
+        if esp32 is not None and esp32.is_open:
+            esp32.close()
+
 
 if __name__ == "__main__":
     worker = threading.Thread(
@@ -266,9 +339,13 @@ if __name__ == "__main__":
     )
     worker.start()
 
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        threaded=True,
-        use_reloader=False
-    )
+    try:
+        app.run(
+            host="127.0.0.1",
+            port=5000,
+            threaded=True,
+            use_reloader=False
+        )
+    finally:
+        if esp32 is not None and esp32.is_open:
+            esp32.close()
