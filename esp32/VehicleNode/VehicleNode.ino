@@ -7,70 +7,91 @@
 // ESP-NOW channel (must match Traffic Node)
 #define ESPNOW_CHANNEL 1
 
-// Built-in LED (common on ESP32 DevKit boards)
-#define LED_PIN 2
+// External LEDs
+#define RED_LED 23
+#define GREEN_LED 17  // Yellow LED for CLEAR
 
 bool hazardDetected = false;
+bool messageReceived = false;
 
-// Called when a wireless message arrives
-void onDataRecv(const esp_now_recv_info_t *info,
-                const uint8_t *data,
-                int len) {
+// Runs automatically when an ESP-NOW message arrives
+void onDataRecv(
+    const esp_now_recv_info_t *info,
+    const uint8_t *data,
+    int len
+) {
+    // Convert received bytes into a String
+    String message = "";
 
-  char message[32];
+    for (int i = 0; i < len; i++) {
+        if (data[i] == '\0') {
+            break;
+        }
 
-  if (len <= 0 || len >= sizeof(message)) {
-    return;
-  }
+        message += (char)data[i];
+    }
 
-  memcpy(message, data, len);
-  message[len] = '\0';
+    message.trim();
 
-  Serial.print("Received: ");
-  Serial.println(message);
+    Serial.print("Received: ");
+    Serial.println(message);
 
-  if (strcmp(message, "HAZARD") == 0) {
-    hazardDetected = true;
-    digitalWrite(LED_PIN, HIGH);
-    Serial.println("WARNING: Hazard detected!");
-  }
-  else if (strcmp(message, "CLEAR") == 0) {
-    hazardDetected = false;
-    digitalWrite(LED_PIN, LOW);
-    Serial.println("SAFE: No hazard detected");
-  }
+    if (message == "HAZARD") {
+        hazardDetected = true;
+        messageReceived = true;
+
+        digitalWrite(RED_LED, HIGH);
+        digitalWrite(GREEN_LED, LOW);
+
+        Serial.println("WARNING: Hazard detected!");
+    }
+    else if (message == "CLEAR") {
+        hazardDetected = false;
+        messageReceived = true;
+
+        digitalWrite(RED_LED, LOW);
+        digitalWrite(GREEN_LED, HIGH);
+
+        Serial.println("SAFE: No hazard detected");
+    }
 }
 
 void setup() {
-  Serial.begin(115200);
-  delay(2000);
+    Serial.begin(115200);
+    delay(1000);
 
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+    // Configure LED pins
+    pinMode(RED_LED, OUTPUT);
+    pinMode(GREEN_LED, OUTPUT);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
+    // Both LEDs OFF until a message arrives
+    digitalWrite(RED_LED, LOW);
+    digitalWrite(GREEN_LED, LOW);
 
-  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
 
-  Serial.print("Vehicle ESP32 MAC: ");
-  uint8_t mac[6];
-esp_wifi_get_mac(WIFI_IF_STA, mac);
+    esp_wifi_set_channel(
+        ESPNOW_CHANNEL,
+        WIFI_SECOND_CHAN_NONE
+    );
 
-Serial.printf("Vehicle ESP32 MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-              mac[0], mac[1], mac[2],
-              mac[3], mac[4], mac[5]);
+    Serial.print("Vehicle ESP32 MAC: ");
+    Serial.println(WiFi.macAddress());
 
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW initialization failed!");
-    return;
-  }
+    // Initialise ESP-NOW
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("ESP-NOW initialization failed");
+        return;
+    }
 
-  esp_now_register_recv_cb(onDataRecv);
+    // Register receive callback
+    esp_now_register_recv_cb(onDataRecv);
 
-  Serial.println("BlindSpot V2X - Vehicle Node Ready");
+    Serial.println("BlindSpot V2X - Vehicle Node Ready");
+    Serial.println("Waiting for HAZARD or CLEAR...");
 }
 
 void loop() {
-  delay(100);
+    delay(100);
 }
